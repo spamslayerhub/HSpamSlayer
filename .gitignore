@@ -1,2 +1,3 @@
-secrets
+praw.ini
 hide_*
+db/
