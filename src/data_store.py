@@ -13,23 +13,47 @@ _connection_pool_cache: Dict[p.Path, "DBConnectionPool"] = {}
 
 
 class DBConnectionPool:
-    def __init__(
-        self,
+    db_path: p.Path
+    pool_size: int
+    db_busy_timeout_ms: int
+
+    semaphore: asyncio.BoundedSemaphore
+
+    write_lock: asyncio.Lock
+    pool: List[sql.Connection]
+    pool_closed: bool
+
+    @classmethod
+    async def new(
+        cls,
         db_path: p.Path,
         pool_size: int = 5,
         db_busy_timeout_ms: int = 5000,
-    ) -> None:
+    ) -> "DBConnectionPool":
         assert pool_size > 0
         assert db_busy_timeout_ms >= 0
 
-        assert _connection_pool_cache.get(db_path) is None
+        self = _connection_pool_cache.get(db_path)
+
+        if (
+            self is not None
+            and self.pool_size == pool_size
+            and self.db_busy_timeout_ms == db_busy_timeout_ms
+        ):
+            return self
+
+        self = cls()
 
         self.db_path = db_path
         self.pool_size = pool_size
         self.db_busy_timeout_ms = db_busy_timeout_ms
+        self.semaphore = asyncio.BoundedSemaphore(self.pool_size)
 
         self.write_lock = asyncio.Lock()
-        self.pool: List[sql.Connection]
+        self.pool_closed = False
+        await self.create_pool()
+
+        return self
 
     async def create_pool(self):
         self.pool = []
@@ -47,9 +71,14 @@ class DBConnectionPool:
             await conn.close()
 
     @asynccontextmanager
-    async def get_connection(self):
-        # TODO: maybe add a wait queue so this doesn't fail an assertion if the connection pool is empty
-        assert self.pool is not None and len(self.pool) != 0
+    async def get_connection(self, timeout_secs: "float|None" = None):
+        """
+        Raises:
+            asyncio.TimeoutError - if `timeout_secs` is not None and it timed out
+        """
+        assert self.pool is not None
+
+        await asyncio.wait_for(self.semaphore.acquire(), timeout=timeout_secs)
 
         conn = self.pool.pop()
 
@@ -57,35 +86,17 @@ class DBConnectionPool:
             yield conn
         finally:
             self.pool.append(conn)
+            self.semaphore.release()
 
     @asynccontextmanager
     async def get_write_connection(self):
         async with self.write_lock, self.get_connection() as conn:
             yield conn
 
-    @staticmethod
-    async def get_connection_pool(
-        db_path: p.Path, pool_size: int = 5, db_busy_timeout_ms: int = 5000
-    ) -> "DBConnectionPool":
 
-        conn_pool = _connection_pool_cache.get(db_path)
-
-        if conn_pool is not None:
-            return conn_pool
-
-        conn_pool = DBConnectionPool(db_path, pool_size, db_busy_timeout_ms)
-
-        # TODO: perhaps do the same thing that was done with HSSDatabase to allow `await` in a constructor type function
-        await conn_pool.create_pool()
-
-        _connection_pool_cache[db_path] = conn_pool
-
-        return conn_pool
-
-
-class HSSDatabase(object):
+class HSSDatabase:
     db_path: p.Path
-    conn_pool: DBConnectionPool
+    _conn_pool: DBConnectionPool
 
     @classmethod
     async def new(
@@ -98,7 +109,7 @@ class HSSDatabase(object):
         self.db_path = p.Path(db_path)
 
         print(db_path)
-        self.conn_pool = await DBConnectionPool.get_connection_pool(
+        self._conn_pool = await DBConnectionPool.new(
             self.db_path, pool_size, db_busy_timeout_ms
         )
 
@@ -112,17 +123,18 @@ class HSSDatabase(object):
     async def __aexit__(self, exception_type, exception_value, exception_traceback):
         await self.close()
 
-    async def _create_modded_subs_table(self, conn: sql.Connection):
+    async def _create_subs_table(self, conn: sql.Connection):
         table_query = """
-        CREATE TABLE IF NOT EXISTS modded_subs (
+        CREATE TABLE IF NOT EXISTS subs (
             id INTEGER PRIMARY KEY,
             name CHAR(22) NOT NULL UNIQUE COLLATE NOCASE,
+            is_mod BOOL NOT NULL,
             description TEXT,
             moderators TEXT NOT NULL,
             permissions TEXT NOT NULL,
             sub_count INTEGER NOT NULL,
             is_nsfw BOOL NOT NULL,
-            sub_id CHAR(5) NOT NULL,
+            sub_id CHAR(5) NOT NULL UNIQUE,
             config TEXT,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -131,7 +143,51 @@ class HSSDatabase(object):
         await conn.commit()
 
         index_query = """
-        CREATE INDEX IF NOT EXISTS idx_modded_subs_name ON modded_subs(name)
+        CREATE INDEX IF NOT EXISTS idx_subs_name_is_mod ON subs(name, is_mod)
+        """
+
+        await conn.execute(index_query)
+        await conn.commit()
+
+    async def _create_bans_table(self, conn: sql.Connection):
+        table_query = """
+        CREATE TABLE IF NOT EXISTS bans (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES banned_users(id),
+            sub_id INTEGER NOT NULL REFERENCES subs(id),
+            efective_duration INTEGER,
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        await conn.execute(table_query)
+        await conn.commit()
+
+        index_query = """
+        CREATE INDEX IF NOT EXISTS idx_bans_user_id ON bans(user_id)
+        """
+
+        await conn.execute(index_query)
+        await conn.commit()
+
+    async def _create_banned_users_table(self, conn: sql.Connection):
+        table_query = """
+        CREATE TABLE IF NOT EXISTS banned_users (
+            id INTEGER PRIMARY KEY,
+            name CHAR(22) NOT NULL UNIQUE COLLATE NOCASE,
+            reason TEXT NOT NULL,
+            duration INTEGER,
+            message TEXT,
+            mod_scope CHAR(22),
+            sub_scope CHAR(22),
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+
+        await conn.execute(table_query)
+        await conn.commit()
+
+        index_query = """
+        CREATE INDEX IF NOT EXISTS idx_banned_users_name ON banned_users(name)
         """
 
         await conn.execute(index_query)
@@ -139,7 +195,7 @@ class HSSDatabase(object):
 
     async def _create_blacklist_table(self, conn: sql.Connection):
         table_query = """
-        CREATE TABLE blacklist (
+        CREATE TABLE IF NOT EXISTS blacklist (
             id INTEGER PRIMARY KEY,
             name CHAR(22) NOT NULL UNIQUE COLLATE NOCASE,
             reason TEXT,
@@ -159,7 +215,7 @@ class HSSDatabase(object):
 
     async def _create_whitelist_table(self, conn: sql.Connection):
         table_query = """
-        CREATE TABLE whitelist (
+        CREATE TABLE IF NOT EXISTS whitelist (
             id INTEGER PRIMARY KEY,
             name CHAR(22) NOT NULL UNIQUE COLLATE NOCASE,
             reason TEXT,
@@ -177,36 +233,13 @@ class HSSDatabase(object):
         await conn.execute(index_query)
         await conn.commit()
 
-    async def _create_banned_users_table(self, conn: sql.Connection):
-        table_query = """
-        CREATE TABLE banned_users (
-            id INTEGER PRIMARY KEY,
-            name CHAR(22) NOT NULL UNIQUE COLLATE NOCASE,
-            reason TEXT NOT NULL,
-            duration INTEGER,
-            message TEXT,
-            mod_scope CHAR(22),
-            sub_scope CHAR(22),
-            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-
-        await conn.execute(table_query)
-        await conn.commit()
-
-        index_query = """
-        CREATE INDEX idx_banned_users_name ON banned_users(name)
-        """
-
-        await conn.execute(index_query)
-        await conn.commit()
-
     async def _create_tables(self):
-        async with self.conn_pool.get_write_connection() as conn:
+        async with self._conn_pool.get_write_connection() as conn:
             await self._create_blacklist_table(conn)
             await self._create_whitelist_table(conn)
-            await self._create_modded_subs_table(conn)
+            await self._create_subs_table(conn)
             await self._create_banned_users_table(conn)
+            await self._create_bans_table(conn)
 
     async def close(self):
-        await self.conn_pool.close_pool()
+        await self._conn_pool.close_pool()
