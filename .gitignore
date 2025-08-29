@@ -1,3 +1,4 @@
 praw.ini
 hide_*
 db/
+.pytest_cache
