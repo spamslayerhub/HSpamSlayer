@@ -1,19 +1,26 @@
 import asyncio
+import dataclasses
+import enum
 import os
-import pathlib as p
+from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Tuple
+from dataclasses import dataclass
+from datetime import datetime
 
 import aiosqlite as sql
+from asyncpraw.models.reddit.subreddit import ModeratorRelationship
 
 
-HSS_DB_PATH = p.Path("db/hss_data.db")
+HSS_DB_PATH = Path("db/hss_data.db")
+DB_STR_LIST_SEP = ", "
 
-_connection_pool_cache: Dict[p.Path, "DBConnectionPool"] = {}
+
+_connection_pool_cache: Dict[Path, "DBConnectionPool"] = {}
 
 
 class DBConnectionPool:
-    db_path: p.Path
+    db_path: Path
     pool_size: int
     db_busy_timeout_ms: int
 
@@ -26,7 +33,7 @@ class DBConnectionPool:
     @classmethod
     async def new(
         cls,
-        db_path: p.Path,
+        db_path: Path,
         pool_size: int = 5,
         db_busy_timeout_ms: int = 5000,
     ) -> "DBConnectionPool":
@@ -63,6 +70,7 @@ class DBConnectionPool:
 
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute(f"PRAGMA busy_timeout={self.db_busy_timeout_ms}")
+            conn.row_factory = sql.Row
 
             self.pool.append(conn)
 
@@ -105,31 +113,172 @@ class DBConnectionPool:
             yield conn
 
 
-class _Blacklist:
-    def __init__(self, data_store: "HSSDataStore"):
+@dataclass
+class SubListEntry:
+    id: int
+    name: str
+    reason: str | None
+    added_at: datetime
+
+    @classmethod
+    def from_row(cls, row: sql.Row | None) -> "SubListEntry | None":
+        if row is None:
+            return row
+
+        return SubListEntry(
+            id=row["id"],
+            name=row["name"],
+            reason=row["reason"],
+            added_at=datetime.fromisoformat(row["added_at"]),
+        )
+
+
+class _SubList:
+    def __init__(self, data_store: "HSSDataStore", table: str):
+        assert table == "blacklist" or table == "whitelist"
+
         self.data_store = data_store
+        self.table = table
 
     async def add(self, subreddit_name: str, reason: str | None):
         async with self.data_store.get_db_write_connection() as conn:
             await conn.execute(
-                "INSERT INTO blacklist (name, reason) VALUES (?, ?)",
+                f"INSERT INTO {self.table} (name, reason) VALUES (?, ?)",
                 (subreddit_name, reason),
             )
             await conn.commit()
 
     async def contains(self, subreddit_name: str) -> bool:
-        async with self.data_store.get_db_write_connection() as conn:
-            cur = await conn.cursor()
-            await cur.execute(
-                "SELECT * FROM blacklist WHERE name = ?", (subreddit_name,)
+        async with self.data_store.get_db_read_connection() as conn:
+            cur = await conn.execute(
+                f"SELECT * FROM {self.table} WHERE name = ?", (subreddit_name,)
             )
             return await cur.fetchone() is not None
 
+    async def get(self, subreddit_name: str) -> SubListEntry | None:
+        async with self.data_store.get_db_read_connection() as conn:
+            cur = await conn.execute(
+                f"SELECT * FROM {self.table} WHERE name = ?", (subreddit_name,)
+            )
+
+            row = await cur.fetchone()
+
+            return SubListEntry.from_row(row)
+
+
+class ModPermission(enum.StrEnum):
+    ACCESS = "access"
+    CHAT_CONFIG = "chat_config"
+    CHAT_OPERATOR = "chat_operator"
+    CONFIG = "config"
+    FLAIR = "flair"
+    MAIL = "mail"
+    POSTS = "posts"
+    WIKI = "wiki"
+    NONE = ""
+
+
+@dataclass
+class SubsEntry:
+    id: int
+    name: str
+    is_mod: bool
+    description: str | None
+    moderators: List[str]
+    permissions: List[ModPermission]
+    sub_count: int
+    is_nsfw: bool
+    sub_id: str
+    config: str | None
+
+    @classmethod
+    def from_row(cls, row: sql.Row | None) -> "SubsEntry | None":
+        if row is None:
+            return row
+
+        return SubsEntry(
+            id=row["id"],
+            name=row["name"],
+            is_mod=bool(row["is_mod"]),
+            description=row["description"],
+            moderators=row["moderators"].split(DB_STR_LIST_SEP),
+            permissions=list(
+                [
+                    ModPermission(perm)
+                    for perm in row["permissions"].split(DB_STR_LIST_SEP)
+                ]
+            ),
+            sub_count=row["sub_count"],
+            is_nsfw=bool(row["is_nsfw"]),
+            sub_id=row["sub_id"],
+            config=row["config"],
+        )
+
+    def as_insert_tuple(self) -> tuple:
+        return (
+            self.name,
+            self.is_mod,
+            self.description,
+            DB_STR_LIST_SEP.join(self.moderators),
+            DB_STR_LIST_SEP.join([x.value for x in self.permissions]),
+            self.sub_count,
+            self.is_nsfw,
+            self.sub_id,
+            self.config,
+        )
+
+
+class _Subs:
+    def __init__(self, data_store: "HSSDataStore"):
+        self.data_store = data_store
+
+    async def get(self, subreddit_name: str) -> SubsEntry | None:
+        async with self.data_store.get_db_read_connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM subs WHERE name = ?", (subreddit_name,)
+            )
+
+            row = await cur.fetchone()
+
+            return SubsEntry.from_row(row)
+
+    async def get_modded(self, subreddit_name: str) -> SubsEntry | None:
+        async with self.data_store.get_db_read_connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM subs WHERE name = ? AND is_mod = 1", (subreddit_name,)
+            )
+
+            row = await cur.fetchone()
+
+            return SubsEntry.from_row(row)
+
+    async def add(self, sub: SubsEntry):
+        async with self.data_store.get_db_write_connection() as conn:
+            await conn.execute(
+                "INSERT INTO subs (name, is_mod, description, moderators, permissions, sub_count, is_nsfw, sub_id, config)"
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                sub.as_insert_tuple(),
+            )
+            await conn.commit()
+
+    async def update(self, new: SubsEntry):
+
+        async with self.data_store.get_db_write_connection() as conn:
+            await conn.execute(
+                "UPDATE subs SET name = ?, is_mod = ?, description = ?, moderators = ?, permissions = ?, sub_count = ?,"
+                " is_nsfw = ?, sub_id = ?, config = ? "
+                "WHERE id = ?",
+                (*new.as_insert_tuple(), new.id),
+            )
+            await conn.commit()
+
 
 class HSSDataStore:
-    db_path: p.Path
+    db_path: Path
     _conn_pool: DBConnectionPool
-    blacklist: _Blacklist
+    blacklist: _SubList
+    whitelist: _SubList
+    subs: _Subs
 
     @classmethod
     async def new(
@@ -139,7 +288,7 @@ class HSSDataStore:
         db_busy_timeout_ms: int = 5000,
     ) -> "HSSDataStore":
         self = cls()
-        self.db_path = p.Path(db_path)
+        self.db_path = Path(db_path)
 
         self._conn_pool = await DBConnectionPool.new(
             self.db_path, pool_size, db_busy_timeout_ms
@@ -147,7 +296,9 @@ class HSSDataStore:
 
         await self._create_tables()
 
-        self.blacklist = _Blacklist(self)
+        self.blacklist = _SubList(self, "blacklist")
+        self.whitelist = _SubList(self, "whitelist")
+        self.subs = _Subs(self)
 
         return self
 
