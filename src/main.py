@@ -3,8 +3,8 @@ import data_store
 
 
 async def main() -> int:
-    db = await data_store.HSSDatabase.new()
-    await db.close()
+    store = await data_store.HSSDataStore.new()
+    await store.close()
 
     print("Hello, World!")
     return 0

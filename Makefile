@@ -5,7 +5,7 @@ shell:
 	@pipenv shell
 
 tests:
-	@pipenv run python3 -m pytest tests/
+	@pipenv run python3 -m pytest --verbose tests/
 
 run:
 	@pipenv run python3 src/main.py

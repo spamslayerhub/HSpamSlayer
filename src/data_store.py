@@ -2,7 +2,7 @@ import asyncio
 import os
 import pathlib as p
 from contextlib import asynccontextmanager
-from typing import Dict, List
+from typing import AsyncIterator, Dict, List
 
 import aiosqlite as sql
 
@@ -51,11 +51,11 @@ class DBConnectionPool:
 
         self.write_lock = asyncio.Lock()
         self.pool_closed = False
-        await self.create_pool()
+        await self._create_pool()
 
         return self
 
-    async def create_pool(self):
+    async def _create_pool(self):
         self.pool = []
 
         for _ in range(self.pool_size):
@@ -71,7 +71,9 @@ class DBConnectionPool:
             await conn.close()
 
     @asynccontextmanager
-    async def get_connection(self, timeout_secs: "float|None" = None):
+    async def get_read_connection(
+        self, timeout_secs: float | None = None
+    ) -> AsyncIterator[sql.Connection]:
         """
         Raises:
             asyncio.TimeoutError - if `timeout_secs` is not None and it timed out
@@ -84,19 +86,50 @@ class DBConnectionPool:
 
         try:
             yield conn
+        except Exception as err:
+            # TODO: add different logs here
+            if conn.in_transaction:
+                await conn.rollback()
+            raise err
         finally:
+            if conn.in_transaction:
+                await conn.rollback()
             self.pool.append(conn)
             self.semaphore.release()
 
     @asynccontextmanager
-    async def get_write_connection(self):
-        async with self.write_lock, self.get_connection() as conn:
+    async def get_write_connection(
+        self, timeout_secs: float | None = None
+    ) -> AsyncIterator[sql.Connection]:
+        async with self.write_lock, self.get_read_connection(timeout_secs) as conn:
             yield conn
 
 
-class HSSDatabase:
+class _Blacklist:
+    def __init__(self, data_store: "HSSDataStore"):
+        self.data_store = data_store
+
+    async def add(self, subreddit_name: str, reason: str | None):
+        async with self.data_store.get_db_write_connection() as conn:
+            await conn.execute(
+                "INSERT INTO blacklist (name, reason) VALUES (?, ?)",
+                (subreddit_name, reason),
+            )
+            await conn.commit()
+
+    async def contains(self, subreddit_name: str) -> bool:
+        async with self.data_store.get_db_write_connection() as conn:
+            cur = await conn.cursor()
+            await cur.execute(
+                "SELECT * FROM blacklist WHERE name = ?", (subreddit_name,)
+            )
+            return await cur.fetchone() is not None
+
+
+class HSSDataStore:
     db_path: p.Path
     _conn_pool: DBConnectionPool
+    blacklist: _Blacklist
 
     @classmethod
     async def new(
@@ -104,18 +137,33 @@ class HSSDatabase:
         db_path: os.PathLike = HSS_DB_PATH,
         pool_size: int = 5,
         db_busy_timeout_ms: int = 5000,
-    ) -> "HSSDatabase":
+    ) -> "HSSDataStore":
         self = cls()
         self.db_path = p.Path(db_path)
 
-        print(db_path)
         self._conn_pool = await DBConnectionPool.new(
             self.db_path, pool_size, db_busy_timeout_ms
         )
 
         await self._create_tables()
 
+        self.blacklist = _Blacklist(self)
+
         return self
+
+    @asynccontextmanager
+    async def get_db_read_connection(
+        self, timeout_secs: float | None = None
+    ) -> AsyncIterator[sql.Connection]:
+        async with self._conn_pool.get_read_connection(timeout_secs) as conn:
+            yield conn
+
+    @asynccontextmanager
+    async def get_db_write_connection(
+        self, timeout_secs: float | None = None
+    ) -> AsyncIterator[sql.Connection]:
+        async with self._conn_pool.get_write_connection(timeout_secs) as conn:
+            yield conn
 
     async def __aenter__(self):
         return
@@ -140,14 +188,12 @@ class HSSDatabase:
         )
         """
         await conn.execute(table_query)
-        await conn.commit()
 
         index_query = """
         CREATE INDEX IF NOT EXISTS idx_subs_name_is_mod ON subs(name, is_mod)
         """
 
         await conn.execute(index_query)
-        await conn.commit()
 
     async def _create_bans_table(self, conn: sql.Connection):
         table_query = """
@@ -160,14 +206,12 @@ class HSSDatabase:
         )
         """
         await conn.execute(table_query)
-        await conn.commit()
 
         index_query = """
         CREATE INDEX IF NOT EXISTS idx_bans_user_id ON bans(user_id)
         """
 
         await conn.execute(index_query)
-        await conn.commit()
 
     async def _create_banned_users_table(self, conn: sql.Connection):
         table_query = """
@@ -184,14 +228,12 @@ class HSSDatabase:
         """
 
         await conn.execute(table_query)
-        await conn.commit()
 
         index_query = """
         CREATE INDEX IF NOT EXISTS idx_banned_users_name ON banned_users(name)
         """
 
         await conn.execute(index_query)
-        await conn.commit()
 
     async def _create_blacklist_table(self, conn: sql.Connection):
         table_query = """
@@ -204,14 +246,12 @@ class HSSDatabase:
         """
 
         await conn.execute(table_query)
-        await conn.commit()
 
         index_query = """
         CREATE INDEX IF NOT EXISTS idx_blacklist_name ON blacklist(name)
         """
 
         await conn.execute(index_query)
-        await conn.commit()
 
     async def _create_whitelist_table(self, conn: sql.Connection):
         table_query = """
@@ -224,14 +264,11 @@ class HSSDatabase:
         """
 
         await conn.execute(table_query)
-        await conn.commit()
-
         index_query = """
         CREATE INDEX IF NOT EXISTS idx_whitelist_name ON whitelist(name)
         """
 
         await conn.execute(index_query)
-        await conn.commit()
 
     async def _create_tables(self):
         async with self._conn_pool.get_write_connection() as conn:
