@@ -4,7 +4,7 @@ import enum
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Tuple
+from typing import Any, AsyncIterator, Dict, Final, List, Tuple, final
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -115,7 +115,7 @@ class DBConnectionPool:
 
 @dataclass
 class SubListEntry:
-    id: int
+    id: Final[int]
     name: str
     reason: str | None
     added_at: datetime
@@ -180,7 +180,7 @@ class ModPermission(enum.StrEnum):
 
 @dataclass
 class SubsEntry:
-    id: int
+    id: Final[int]
     name: str
     is_mod: bool
     description: str | None
@@ -262,7 +262,6 @@ class _Subs:
             await conn.commit()
 
     async def update(self, new: SubsEntry):
-
         async with self.data_store.get_db_write_connection() as conn:
             await conn.execute(
                 "UPDATE subs SET name = ?, is_mod = ?, description = ?, moderators = ?, permissions = ?, sub_count = ?,"
@@ -271,6 +270,62 @@ class _Subs:
                 (*new.as_insert_tuple(), new.id),
             )
             await conn.commit()
+
+
+@dataclass
+class BannedUsersEntry:
+    id: Final[int]
+    name: str
+    reason: str
+    duration: int | None
+    message: str | None
+    mod_scope: str | None
+    sub_scope: str | None
+    banned_at: datetime
+
+    @classmethod
+    def from_row(cls, row: sql.Row | None) -> "BannedUsersEntry | None":
+        if row is None:
+            return row
+
+        return BannedUsersEntry(
+            id=row["id"],
+            name=row["name"],
+            reason=row["reason"],
+            duration=row["duration"],
+            message=row["message"],
+            mod_scope=row["mod_scope"],
+            sub_scope=row["sub_scope"],
+            banned_at=datetime.fromisoformat(row["banned_at"]),
+        )
+
+    def as_insert_tuple(self):
+        return (
+            self.name,
+            self.reason,
+            self.duration,
+            self.message,
+            self.mod_scope,
+            self.sub_scope,
+            self.banned_at.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+
+class _BannedUsers:
+    def __init__(self, data_store: "HSSDataStore"):
+        self.data_store = data_store
+
+    async def get(self, user_name: str) -> BannedUsersEntry | None:
+        async with self.data_store.get_db_read_connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM banned_users WHERE name = ?", (user_name,)
+            )
+
+            row = await cur.fetchone()
+
+            return BannedUsersEntry.from_row(row)
+
+    pass
 
 
 class HSSDataStore:
@@ -352,7 +407,7 @@ class HSSDataStore:
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES banned_users(id),
             sub_id INTEGER NOT NULL REFERENCES subs(id),
-            efective_duration INTEGER,
+            effective_duration INTEGER,
             banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -377,6 +432,9 @@ class HSSDataStore:
             banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
+        # TODO: perhaps mod_scope is asking for a moderators table
+        # NOTE: we keep the sub_scope as the name of the subreddit because we only need to check if
+        # the sub we're looking to ban the user on is the same as that scope
 
         await conn.execute(table_query)
 
