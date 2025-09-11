@@ -16,6 +16,7 @@ class ScheduledTask:
     last_ran_at: dt.datetime
 
 
+# TODO: this needs a db table to keep the last time every task was ran
 class Scheduler:
     def __init__(self) -> None:
         self.tasks: List[ScheduledTask] = []
