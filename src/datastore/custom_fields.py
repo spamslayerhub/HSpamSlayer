@@ -2,6 +2,19 @@ import enum
 from typing import Set
 
 from tortoise import fields
+from tortoise.validators import MaxValueValidator, MinValueValidator
+
+
+class RedditDuration(fields.SmallIntField):
+    def __init__(self, **kwargs):
+        validators = ([MinValueValidator(0), MaxValueValidator(999)],)
+        vals = kwargs.get("validators")
+        if vals is not None:
+            assert isinstance(vals, list)
+            vals.extend(validators)
+        else:
+            kwargs["validators"] = validators
+        super().__init__(**kwargs)
 
 
 class RedditName(fields.CharField):
@@ -13,6 +26,17 @@ class RedditName(fields.CharField):
 
     def to_python_value(self, value: str) -> str:
         return value
+
+
+class RedditPermaLink(fields.CharField):
+    def __init__(self, **kwargs):
+        # 300 should be enough
+        super().__init__(max_length=300, **kwargs)
+
+
+class URL(fields.CharField):
+    def __init__(self, **kwargs):
+        super().__init__(max_length=2000, **kwargs)
 
 
 class Permission(enum.StrEnum):

@@ -1,3 +1,4 @@
+import enum
 from tortoise import fields
 from tortoise.models import Model
 from tortoise.validators import MaxValueValidator, MinValueValidator
@@ -38,22 +39,10 @@ class User(Model):
     created_at = fields.DatetimeField()
     last_updated_at = fields.DatetimeField(auto_now=True)
     added_at = fields.DatetimeField(auto_now_add=True)
-    # TODO: is it even worth it to make this a M2M? It would require 4
-    # read queries just to check if a post was made in a sub the user
-    # is a mod in:
-    # 1. u = User.get(username)
-    # 2. ban = u.hss_ban
-    # 3. mod = ban.mod_scope
-    # 4. mod.moderating
-    #
-    # perhaps this is managable with prefetching? or am I just going
-    # too into relations/atomicity and should be just focusing on
-    # minimizing queries instead?
-    #
-    # maybe I should keep duplicates? like a list of comma separated
-    # subreddit names for a way to check if a user mods a sub without
-    # any additional reads. I'm debating how useful having this relation
-    # might be...
+    subreddit: fields.ForeignKeyNullableRelation[Sub] = fields.ForeignKeyField(
+        "models.Sub", null=True
+    )
+
     moderating: fields.ManyToManyRelation[Sub] = fields.ManyToManyField(
         "models.Sub", related_name="moderators", through="moderating"
     )
@@ -62,17 +51,95 @@ class User(Model):
 
 class Ban(Model):
     id = fields.IntField(primary_key=True)
-    user = fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
-    reason = fields.CharField(max_length=255)
-    duration = fields.IntField(
-        validators=[MinValueValidator(0), MaxValueValidator(999)],
+    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+        "models.User", related_name="hss_ban"
     )
-    mod_scope = fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+    was_automatic = fields.BooleanField()
+    reason = fields.CharField(max_length=255)
+    duration = custom_fields.RedditDuration()
+    mod_scope = fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
         "models.User", null=True
     )
+    reddit_reason = fields.CharField(max_length=100, null=True)
     message = fields.TextField(null=True)
+    # will this work? char is normally limited to 255
+    note = fields.CharField(max_length=300, null=True)
     banned_at = fields.DatetimeField(auto_now_add=True)
 
 
-# class SubBan(Model):
-#     ban =
+class SubBan(Model):
+    id = fields.IntField(primary_key=True)
+    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    effective_duration = custom_fields.RedditDuration()
+    banned_at = fields.DatetimeField(auto_now_add=True)
+
+
+class UserSubInfo(Model):
+    id = fields.IntField(primary_key=True)
+    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    is_flagged = fields.BooleanField()
+    strikes = fields.IntField()
+    score = fields.IntField()
+    sub_activity_score = fields.IntField()
+    profile_activity_score = fields.IntField()
+
+
+class Post(Model):
+    id = fields.IntField(primary_key=True)
+    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    submission_id = fields.CharField(max_length=5, unique=True)
+    was_edited = fields.BooleanField()
+    is_self = fields.BooleanField()
+    is_locked = fields.BooleanField()
+    is_nsfw = fields.BooleanField()
+    comment_count = fields.IntField(validators=[MinValueValidator(0)])
+    permalink = custom_fields.RedditPermaLink(unique=True)
+    score = fields.IntField(validators=[MinValueValidator(0)])
+    upvote_ratio = fields.FloatField(validators=[MinValueValidator(0)])
+    selftext = fields.TextField(null=True)
+    is_stickied = fields.BooleanField()
+    title = fields.CharField(max_length=300, null=True)
+    url = custom_fields.URL(null=True)
+    created_at = fields.DatetimeField()
+
+
+class Comment(Model):
+    id = fields.IntField(primary_key=True)
+    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    post: fields.ForeignKeyRelation[Post] = fields.ForeignKeyField("models.Post")
+    body = fields.TextField()
+    was_edited = fields.BooleanField()
+    comment_id = fields.CharField(max_length=5)
+    parent_id = fields.CharField(max_length=5, null=True)
+    is_submitter = fields.BooleanField()
+    is_stickied = fields.BooleanField()
+    permalink = custom_fields.RedditPermaLink(unique=True)
+    score = fields.IntField(validators=[MinValueValidator(0)])
+    created_at = fields.DatetimeField()
+
+
+class UserActivity(Model):
+    id = fields.IntField(primary_key=True)
+    comment = fields.ForeignKeyRelation[Comment] = fields.ForeignKeyField(
+        "models.Comment"
+    )
+    post = fields.ForeignKeyRelation[Post] = fields.ForeignKeyField("models.Post")
+    # TODO
+
+
+class SubList:
+    id = fields.IntField(primary_key=True)
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    added_at = fields.DatetimeField(auto_now_add=True)
+
+
+class Blacklist(Model, SubList):
+    pass
+
+
+class Whitelist(Model, SubList):
+    pass
