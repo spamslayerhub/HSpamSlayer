@@ -24,6 +24,9 @@ class Sub(Model):
     added_at = fields.DatetimeField(auto_now_add=True)
     moderators: fields.ManyToManyRelation["User"]
 
+    comments: fields.ReverseRelation["Comment"]
+    posts: fields.ReverseRelation["Post"]
+
 
 class User(Model):
     id = fields.IntField(primary_key=True)
@@ -46,6 +49,8 @@ class User(Model):
     moderating: fields.ManyToManyRelation[Sub] = fields.ManyToManyField(
         "models.Sub", related_name="moderators", through="moderating"
     )
+    comments: fields.ReverseRelation["Comment"]
+    posts: fields.ReverseRelation["Post"]
     hss_ban: fields.ReverseRelation["Ban"]
 
 
@@ -80,21 +85,30 @@ class UserSubInfo(Model):
     user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
     sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
     is_flagged = fields.BooleanField()
-    strikes = fields.IntField()
-    score = fields.IntField()
-    sub_activity_score = fields.IntField()
-    profile_activity_score = fields.IntField()
+    strikes = fields.IntField(validators=[MinValueValidator(0)])
+    score = fields.IntField(validators=[MinValueValidator(0)])
+    sub_activity_score = fields.IntField(validators=[MinValueValidator(0)])
+    profile_activity_score = fields.IntField(validators=[MinValueValidator(0)])
 
 
+# TODO: store crosspost parent
 class Post(Model):
     id = fields.IntField(primary_key=True)
-    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+        "models.User", related_name="posts"
+    )
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField(
+        "models.Sub", related_name="posts"
+    )
     submission_id = fields.CharField(max_length=5, unique=True)
     was_edited = fields.BooleanField()
     is_self = fields.BooleanField()
     is_locked = fields.BooleanField()
     is_nsfw = fields.BooleanField()
+    is_crosspost = fields.BooleanField()
+    crosspost_parent: fields.ForeignKeyNullableRelation["Post"] = (
+        fields.ForeignKeyField("models.Post", null=True)
+    )
     comment_count = fields.IntField(validators=[MinValueValidator(0)])
     permalink = custom_fields.RedditPermaLink(unique=True)
     score = fields.IntField(validators=[MinValueValidator(0)])
@@ -104,13 +118,22 @@ class Post(Model):
     title = fields.CharField(max_length=300, null=True)
     url = custom_fields.URL(null=True)
     created_at = fields.DatetimeField()
+    added_at = fields.DatetimeField(auto_now_add=True)
+
+    comments: fields.ReverseRelation["Comment"]
 
 
 class Comment(Model):
     id = fields.IntField(primary_key=True)
-    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
-    post: fields.ForeignKeyRelation[Post] = fields.ForeignKeyField("models.Post")
+    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+        "models.User", related_name="comments"
+    )
+    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField(
+        "models.Sub", related_name="comments"
+    )
+    post: fields.ForeignKeyRelation[Post] = fields.ForeignKeyField(
+        "models.Post", related_name="comments"
+    )
     body = fields.TextField()
     was_edited = fields.BooleanField()
     comment_id = fields.CharField(max_length=5)
@@ -120,14 +143,38 @@ class Comment(Model):
     permalink = custom_fields.RedditPermaLink(unique=True)
     score = fields.IntField(validators=[MinValueValidator(0)])
     created_at = fields.DatetimeField()
+    added_at = fields.DatetimeField(auto_now_add=True)
 
 
-class UserActivity(Model):
+class RecordReason(enum.StrEnum):
+    SCORE_CHANGE = "score_change"
+    STRIKE_CHANGE = "strike_change"
+    FLAGGED = "flagged"
+    CROSSPOST = "crosspost"
+    PATTERN_MATCHED = "pattern_matched"
+    REPEATED_POST = "repeated_post"
+
+
+class UserRecord(Model):
     id = fields.IntField(primary_key=True)
     comment = fields.ForeignKeyRelation[Comment] = fields.ForeignKeyField(
         "models.Comment"
     )
     post = fields.ForeignKeyRelation[Post] = fields.ForeignKeyField("models.Post")
+    reason = fields.CharEnumField(RecordReason)
+
+    orignal_score = fields.IntField(validators=[MinValueValidator(0)], null=True)
+    score_change = fields.IntField(null=True)
+
+    orignal_strikes = fields.IntField(validators=[MinValueValidator(0)], null=True)
+    strikes_change = fields.IntField(null=True)
+
+    pattern = fields.TextField(null=True)
+
+    repeted_post = fields.ForeignKeyRelation[Post] = fields.ForeignKeyField(
+        "models.Post"
+    )
+
     # TODO
 
 
