@@ -1,38 +1,50 @@
-from datetime import datetime
-import unittest
-import aiosqlite as sql
-from pathlib import Path as p
-
-import src.data_store as data_store
+from tortoise.contrib import test
+from src.datastore.models import Sub
+from src.datastore.custom_fields import Permission
 
 
-# no need to test whitelist here since it uses the same class as blacklist
-class TestBlacklist(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.store = await data_store.HSSDataStore.new(p(":memory:"))
-        self.addAsyncCleanup(self.store.close)
+class TestSub(test.IsolatedTestCase):
+    async def test_create_sub(self):
+        s = Sub(
+            name="test",
+            is_mod=True,
+            description="test_sub",
+            permissions=Permission.all(),
+            sub_count=10,
+            is_nsfw=False,
+            is_banned=False,
+            sub_id="test1",
+            config="",
+        )
+        await s.save()
 
-    async def test_add(self):
+        s1 = await Sub.get(name="test")
+        self.assertEqual(s, s1)
 
-        await self.store.blacklist.add("test", None)
+    @test.expectedFailure
+    async def test_get_sub_bad(self):
+        await Sub.get(name="test")
 
-        with self.assertRaises(sql.IntegrityError):
-            await self.store.blacklist.add("test", None)
+    async def test_update_sub(self):
+        s_og = Sub(
+            name="test",
+            is_mod=True,
+            description="test_sub",
+            permissions=Permission.all(),
+            sub_count=10,
+            is_nsfw=False,
+            is_banned=False,
+            sub_id="test1",
+            config="",
+        )
 
-    async def test_contains(self):
-        await self.store.blacklist.add("test_contains", None)
+        await s_og.save()
 
-        self.assertTrue(await self.store.blacklist.contains("test_contains"))
-        self.assertFalse(await self.store.blacklist.contains("test_contains1"))
+        s_new = await Sub.get(name="test")
+        s_new.is_banned = True
+        await s_new.save()
 
-    async def test_get(self):
-        await self.store.blacklist.add("test_get", "test")
+        s_current = await Sub.get(name="test")
 
-        entry = await self.store.blacklist.get("test_get")
-
-        self.assertIsNotNone(entry)
-        assert entry is not None
-
-        self.assertEqual(entry.name, "test_get")
-        self.assertEqual(entry.reason, "test")
-        self.assertIsInstance(entry.added_at, datetime)
+        self.assertNotEqual(s_og.is_banned, s_current.is_banned)
+        self.assertEqual(s_new.is_banned, s_current.is_banned)

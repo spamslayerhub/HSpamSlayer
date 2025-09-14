@@ -1,4 +1,5 @@
 import enum
+from typing import Final, Generic, TypeVar
 from tortoise import fields
 from tortoise.models import Model
 from tortoise.validators import MaxValueValidator, MinValueValidator
@@ -9,8 +10,8 @@ from . import custom_fields
 
 
 class Sub(Model):
-    id = fields.IntField(primary_key=True)
-    name = custom_fields.RedditName(unique=True)
+    id: Final = fields.IntField(primary_key=True)
+    name: Final = custom_fields.RedditName(unique=True)
     is_mod = fields.BooleanField()
     description = fields.TextField(null=True)
     permissions = custom_fields.SubPermissions()
@@ -18,19 +19,21 @@ class Sub(Model):
     is_nsfw = fields.BooleanField()
     is_banned = fields.BooleanField()
     # TODO: not sure the sub id is 5
-    sub_id = fields.CharField(max_length=5, unique=True)
+    sub_id: Final = fields.CharField(max_length=5, unique=True)
     config = fields.TextField(null=True)
-    last_updated_at = fields.DatetimeField(auto_now=True)
-    added_at = fields.DatetimeField(auto_now_add=True)
-    moderators: fields.ManyToManyRelation["User"]
 
+    last_updated_at = fields.DatetimeField(auto_now=True)
+    added_at: Final = fields.DatetimeField(auto_now_add=True)
+    moderators: fields.ManyToManyRelation["User"]
+    users_info: fields.ReverseRelation["UserSubInfo"]
+    user_bans: fields.ReverseRelation["SubBan"]
     comments: fields.ReverseRelation["Comment"]
     posts: fields.ReverseRelation["Post"]
 
 
 class User(Model):
-    id = fields.IntField(primary_key=True)
-    name = custom_fields.RedditName(unique=True)
+    id: Final = fields.IntField(primary_key=True)
+    name: Final = custom_fields.RedditName(unique=True)
     is_gold = fields.BooleanField()
     is_mod = fields.BooleanField()
     is_suspended = fields.BooleanField()
@@ -38,12 +41,14 @@ class User(Model):
     comment_karma = fields.IntField()
     link_karma = fields.IntField()
     # TODO: not sure the user id is 5
-    user_id = fields.CharField(max_length=5, unique=True)
-    created_at = fields.DatetimeField()
+    user_id: Final = fields.CharField(max_length=5, unique=True)
+    created_at: Final = fields.DatetimeField()
     last_updated_at = fields.DatetimeField(auto_now=True)
-    added_at = fields.DatetimeField(auto_now_add=True)
+    added_at: Final = fields.DatetimeField(auto_now_add=True)
     subreddit: fields.ForeignKeyNullableRelation[Sub] = fields.ForeignKeyField(
-        "models.Sub", null=True
+        "models.Sub",
+        related_name=False,
+        null=True,
     )
 
     moderating: fields.ManyToManyRelation[Sub] = fields.ManyToManyField(
@@ -52,38 +57,48 @@ class User(Model):
     comments: fields.ReverseRelation["Comment"]
     posts: fields.ReverseRelation["Post"]
     hss_ban: fields.ReverseRelation["Ban"]
+    sub_bans: fields.ReverseRelation["SubBan"]
+    subs_info: fields.ReverseRelation["UserSubInfo"]
 
 
 class Ban(Model):
-    id = fields.IntField(primary_key=True)
-    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+    id: Final = fields.IntField(primary_key=True)
+    user: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
         "models.User", related_name="hss_ban"
     )
     was_automatic = fields.BooleanField()
-    reason = fields.CharField(max_length=255)
+    reason: Final = fields.CharField(max_length=255)
     duration = custom_fields.RedditDuration()
-    mod_scope = fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
-        "models.User", null=True
+    mod_scope: fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
+        "models.User", related_name=False, null=True
     )
     reddit_reason = fields.CharField(max_length=100, null=True)
     message = fields.TextField(null=True)
     # will this work? char is normally limited to 255
     note = fields.CharField(max_length=300, null=True)
-    banned_at = fields.DatetimeField(auto_now_add=True)
+    banned_at: Final = fields.DatetimeField(auto_now_add=True)
 
 
 class SubBan(Model):
-    id = fields.IntField(primary_key=True)
-    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
-    effective_duration = custom_fields.RedditDuration()
-    banned_at = fields.DatetimeField(auto_now_add=True)
+    id: Final = fields.IntField(primary_key=True)
+    user: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
+        "models.User", related_name="sub_bans"
+    )
+    sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
+        "models.Sub", related_name="user_bans"
+    )
+    effective_duration: Final = custom_fields.RedditDuration()
+    banned_at: Final = fields.DatetimeField(auto_now_add=True)
 
 
 class UserSubInfo(Model):
-    id = fields.IntField(primary_key=True)
-    user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField("models.User")
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
+    id: Final = fields.IntField(primary_key=True)
+    user: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
+        "models.User", related_name="subs_info"
+    )
+    sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
+        "models.Sub", related_name="users_info"
+    )
     is_flagged = fields.BooleanField()
     strikes = fields.IntField(validators=[MinValueValidator(0)])
     score = fields.IntField(validators=[MinValueValidator(0)])
@@ -93,57 +108,57 @@ class UserSubInfo(Model):
 
 # TODO: store crosspost parent
 class Post(Model):
-    id = fields.IntField(primary_key=True)
-    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+    id: Final = fields.IntField(primary_key=True)
+    author: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
         "models.User", related_name="posts"
     )
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField(
+    sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
         "models.Sub", related_name="posts"
     )
-    submission_id = fields.CharField(max_length=5, unique=True)
+    submission_id: Final = fields.CharField(max_length=5, unique=True)
     was_edited = fields.BooleanField()
-    is_self = fields.BooleanField()
+    is_self: Final = fields.BooleanField()
     is_locked = fields.BooleanField()
     is_nsfw = fields.BooleanField()
-    is_crosspost = fields.BooleanField()
-    crosspost_parent: fields.ForeignKeyNullableRelation["Post"] = (
-        fields.ForeignKeyField("models.Post", null=True)
+    is_crosspost: Final = fields.BooleanField()
+    crosspost_parent: Final[fields.ForeignKeyNullableRelation["Post"]] = (
+        fields.ForeignKeyField("models.Post", related_name=False, null=True)
     )
     comment_count = fields.IntField(validators=[MinValueValidator(0)])
-    permalink = custom_fields.RedditPermaLink(unique=True)
+    permalink: Final = custom_fields.RedditPermaLink(unique=True)
     score = fields.IntField(validators=[MinValueValidator(0)])
     upvote_ratio = fields.FloatField(validators=[MinValueValidator(0)])
     selftext = fields.TextField(null=True)
     is_stickied = fields.BooleanField()
     title = fields.CharField(max_length=300, null=True)
     url = custom_fields.URL(null=True)
-    created_at = fields.DatetimeField()
-    added_at = fields.DatetimeField(auto_now_add=True)
+    created_at: Final = fields.DatetimeField()
+    added_at: Final = fields.DatetimeField(auto_now_add=True)
 
     comments: fields.ReverseRelation["Comment"]
 
 
 class Comment(Model):
-    id = fields.IntField(primary_key=True)
-    author: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
+    id: Final = fields.IntField(primary_key=True)
+    author: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
         "models.User", related_name="comments"
     )
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField(
+    sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
         "models.Sub", related_name="comments"
     )
-    post: fields.ForeignKeyRelation[Post] = fields.ForeignKeyField(
+    post: Final[fields.ForeignKeyRelation[Post]] = fields.ForeignKeyField(
         "models.Post", related_name="comments"
     )
     body = fields.TextField()
     was_edited = fields.BooleanField()
-    comment_id = fields.CharField(max_length=5)
-    parent_id = fields.CharField(max_length=5, null=True)
-    is_submitter = fields.BooleanField()
+    comment_id: Final = fields.CharField(max_length=5)
+    parent_id: Final = fields.CharField(max_length=5, null=True)
+    is_submitter: Final = fields.BooleanField()
     is_stickied = fields.BooleanField()
-    permalink = custom_fields.RedditPermaLink(unique=True)
+    permalink: Final = custom_fields.RedditPermaLink(unique=True)
     score = fields.IntField(validators=[MinValueValidator(0)])
-    created_at = fields.DatetimeField()
-    added_at = fields.DatetimeField(auto_now_add=True)
+    created_at: Final = fields.DatetimeField()
+    added_at: Final = fields.DatetimeField(auto_now_add=True)
 
 
 class RecordReason(enum.StrEnum):
@@ -156,32 +171,38 @@ class RecordReason(enum.StrEnum):
 
 
 class UserRecord(Model):
-    id = fields.IntField(primary_key=True)
-    comment = fields.ForeignKeyRelation[Comment] = fields.ForeignKeyField(
-        "models.Comment"
+    id: Final = fields.IntField(primary_key=True)
+    comment: Final[fields.ForeignKeyNullableRelation[Comment]] = fields.ForeignKeyField(
+        "models.Comment", related_name=False, null=True
     )
-    post = fields.ForeignKeyRelation[Post] = fields.ForeignKeyField("models.Post")
-    reason = fields.CharEnumField(RecordReason)
+    post: Final[fields.ForeignKeyNullableRelation[Post]] = fields.ForeignKeyField(
+        "models.Post", related_name=False, null=True
+    )
+    reason: Final = fields.CharEnumField(RecordReason)
 
-    orignal_score = fields.IntField(validators=[MinValueValidator(0)], null=True)
-    score_change = fields.IntField(null=True)
+    orignal_score: Final = fields.IntField(validators=[MinValueValidator(0)], null=True)
+    score_change: Final = fields.IntField(null=True)
 
-    orignal_strikes = fields.IntField(validators=[MinValueValidator(0)], null=True)
-    strikes_change = fields.IntField(null=True)
+    orignal_strikes: Final = fields.IntField(
+        validators=[MinValueValidator(0)], null=True
+    )
+    strikes_change: Final = fields.IntField(null=True)
 
-    pattern = fields.TextField(null=True)
+    pattern: Final = fields.TextField(null=True)
 
-    repeted_post = fields.ForeignKeyRelation[Post] = fields.ForeignKeyField(
-        "models.Post"
+    repeted_post: Final[fields.ForeignKeyNullableRelation[Post]] = (
+        fields.ForeignKeyField("models.Post", related_name=False, null=True)
     )
 
     # TODO
 
 
 class SubList:
-    id = fields.IntField(primary_key=True)
-    sub: fields.ForeignKeyRelation[Sub] = fields.ForeignKeyField("models.Sub")
-    added_at = fields.DatetimeField(auto_now_add=True)
+    id: Final = fields.IntField(primary_key=True)
+    sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
+        "models.Sub", related_name=False
+    )
+    added_at: Final = fields.DatetimeField(auto_now_add=True)
 
 
 class Blacklist(Model, SubList):
