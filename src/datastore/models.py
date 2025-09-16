@@ -12,23 +12,27 @@ from . import custom_fields
 class Sub(Model):
     id: Final = fields.IntField(primary_key=True)
     name: Final = custom_fields.RedditName(unique=True)
-    is_mod = fields.BooleanField()
     description = fields.TextField(null=True)
-    permissions = custom_fields.SubPermissions()
     sub_count = fields.IntField(validators=[MinValueValidator(0)])
     is_nsfw = fields.BooleanField()
     is_banned = fields.BooleanField()
-    # TODO: not sure the sub id is 5
-    sub_id: Final = fields.CharField(max_length=5, unique=True)
+    sub_id: Final = custom_fields.RedditID()
     config = fields.TextField(null=True)
-
     last_updated_at = fields.DatetimeField(auto_now=True)
     added_at: Final = fields.DatetimeField(auto_now_add=True)
+
     moderators: fields.ManyToManyRelation["User"]
     users_info: fields.ReverseRelation["UserSubInfo"]
     user_bans: fields.ReverseRelation["SubBan"]
     comments: fields.ReverseRelation["Comment"]
     posts: fields.ReverseRelation["Post"]
+
+
+class Moderating(Model):
+    id: Final = fields.IntField(primary_key=True)
+    user: Final = fields.ForeignKeyField("models.User", related_name="moderatings")
+    sub: Final = fields.ForeignKeyField("models.Sub", related_name="moderatings")
+    permissions = custom_fields.SubPermissions()
 
 
 class User(Model):
@@ -40,8 +44,9 @@ class User(Model):
     has_verified_email = fields.BooleanField()
     comment_karma = fields.IntField()
     link_karma = fields.IntField()
-    # TODO: not sure the user id is 5
-    user_id: Final = fields.CharField(max_length=5, unique=True)
+    awarder_karma = fields.IntField()
+    total_karma = fields.IntField()
+    user_id: Final = custom_fields.RedditID()
     created_at: Final = fields.DatetimeField()
     last_updated_at = fields.DatetimeField(auto_now=True)
     added_at: Final = fields.DatetimeField(auto_now_add=True)
@@ -52,7 +57,7 @@ class User(Model):
     )
 
     moderating: fields.ManyToManyRelation[Sub] = fields.ManyToManyField(
-        "models.Sub", related_name="moderators", through="moderating"
+        "models.Sub", through="moderating", backward_key="user_id", forward_key="sub_id"
     )
     comments: fields.ReverseRelation["Comment"]
     posts: fields.ReverseRelation["Post"]
@@ -74,7 +79,6 @@ class Ban(Model):
     )
     reddit_reason = fields.CharField(max_length=100, null=True)
     message = fields.TextField(null=True)
-    # will this work? char is normally limited to 255
     note = fields.CharField(max_length=300, null=True)
     banned_at: Final = fields.DatetimeField(auto_now_add=True)
 
@@ -91,6 +95,7 @@ class SubBan(Model):
     banned_at: Final = fields.DatetimeField(auto_now_add=True)
 
 
+# TODO: make this work like a M2M relation on tortoise
 class UserSubInfo(Model):
     id: Final = fields.IntField(primary_key=True)
     user: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
@@ -115,7 +120,8 @@ class Post(Model):
     sub: Final[fields.ForeignKeyRelation[Sub]] = fields.ForeignKeyField(
         "models.Sub", related_name="posts"
     )
-    submission_id: Final = fields.CharField(max_length=5, unique=True)
+    submission_id: Final = custom_fields.RedditID()
+    was_processed = fields.BooleanField()
     was_edited = fields.BooleanField()
     is_self: Final = fields.BooleanField()
     is_locked = fields.BooleanField()
@@ -151,8 +157,9 @@ class Comment(Model):
     )
     body = fields.TextField()
     was_edited = fields.BooleanField()
-    comment_id: Final = fields.CharField(max_length=5)
-    parent_id: Final = fields.CharField(max_length=5, null=True)
+    was_processed = fields.BooleanField()
+    comment_id: Final = custom_fields.RedditID()
+    parent_id: Final = custom_fields.RedditID(unique=False)
     is_submitter: Final = fields.BooleanField()
     is_stickied = fields.BooleanField()
     permalink: Final = custom_fields.RedditPermaLink(unique=True)

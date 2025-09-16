@@ -31,8 +31,17 @@ class RedditName(fields.CharField):
 
 class RedditPermaLink(fields.CharField):
     def __init__(self, **kwargs):
-        # 300 should be enough
-        super().__init__(max_length=300, **kwargs)
+        # 500 should be enough
+        super().__init__(max_length=500, **kwargs)
+
+
+class RedditID(fields.CharField):
+    def __init__(self, **kwargs):
+        # this should cover for the possibility of
+        # 3 quadrillion posts/comments/users
+
+        kwargs["unique"] = kwargs.get("unique", True)
+        super().__init__(max_length=10, **kwargs)
 
 
 class URL(fields.CharField):
