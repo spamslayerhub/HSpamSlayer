@@ -317,7 +317,34 @@ def lru_aio(
         wrapper.delete = delete
 
         async def update(*args: P.args, **kwargs: P.kwargs):
-            await wrapper(*args, **kwargs)
+            key = make_key(args, kwargs)
+
+            fut: asyncio.Future[R] | None = None
+
+            async with pending_lock:
+                pending_fut = pending.get(key)
+                if pending_fut is None:
+                    fut = asyncio.Future()
+                    pending[key] = fut
+
+            if pending_fut is not None:
+                result = await pending_fut
+                await cache.set(key, result)
+                return
+
+            assert fut is not None
+
+            try:
+                result = await func(*args, **kwargs)
+                await cache.set(key, result)
+                fut.set_result(result)
+            except Exception as e:
+                fut.set_exception(e)
+                raise e
+            finally:
+                async with pending_lock:
+                    if key in pending and pending[key] is fut:
+                        del pending[key]
 
         wrapper.update = update
 
