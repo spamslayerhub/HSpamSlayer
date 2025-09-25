@@ -1,5 +1,5 @@
 from tortoise.contrib import test
-from src.datastore.models import Sub, User
+from src.datastore.models import Ban, Sub, User
 from src.datastore.custom_fields import Permission
 
 # TODO:
@@ -88,7 +88,6 @@ class TestSub(test.IsolatedTestCase):
 # )
 # comments: fields.ReverseRelation["Comment"]
 # posts: fields.ReverseRelation["Post"]
-# hss_ban: fields.ReverseRelation["Ban"]
 # sub_bans: fields.ReverseRelation["SubBan"]
 # subs_info: fields.ReverseRelation["UserSubInfo"]
 
@@ -147,7 +146,7 @@ class TestUser(test.IsolatedTestCase):
     async def test_get_user_bad(self):
         await User.get(name="test")
 
-    async def test_update_sub(self):
+    async def test_update_user(self):
 
         u_og = User(
             name="test",
@@ -173,6 +172,64 @@ class TestUser(test.IsolatedTestCase):
 
         self.assertNotEqual(u_og.is_suspended, u_current.is_suspended)
         self.assertEqual(u_new.is_suspended, u_current.is_suspended)
+
+
+# id: Final = fields.IntField(primary_key=True)
+# user: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(
+#     "models.User", related_name="hss_ban"
+# )
+# was_automatic = fields.BooleanField()
+# reason: Final = fields.CharField(max_length=255)
+# duration = custom_fields.RedditDuration()
+# mod_scope: fields.ForeignKeyNullableRelation[User] = fields.ForeignKeyField(
+#     "models.User", related_name=False, null=True
+# )
+# reddit_reason = fields.CharField(max_length=100, null=True)
+# message = fields.TextField(null=True)
+# note = fields.CharField(max_length=300, null=True)
+# banned_at: Final = fields.DatetimeField(auto_now_add=True)
+
+
+class TestBan(test.IsolatedTestCase):
+    async def test_create_ban(self):
+        u = User(
+            name="test",
+            is_gold=False,
+            is_mod=False,
+            is_suspended=False,
+            has_verified_email=True,
+            comment_karma=10,
+            link_karma=30,
+            awarder_karma=0,
+            total_karma=40,
+            user_id="testid",
+            created_at="2025-09-16 09:24",
+        )
+
+        await u.save()
+
+        b = Ban(
+            user=u,
+            was_automatic=False,
+            reason="some reason",
+            duration=0,
+            mod_scope=None,
+            reddit_reason=None,
+            message="some message",
+            note="some note",
+        )
+
+        await b.save()
+
+        ban_from_user = await Ban.get(user__name="test")
+        user_from_ban = await User.get(name="test", hss_ban__isnull=False)
+
+        self.assertEqual(u, user_from_ban)
+        self.assertEqual(b, ban_from_user)
+
+    @test.expectedFailure
+    async def test_get_ban_bad(self):
+        await Ban.get(user__name="test")
 
 
 # TODO: remove this

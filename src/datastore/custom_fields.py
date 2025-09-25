@@ -8,7 +8,7 @@ from tortoise.validators import MaxValueValidator, MinValueValidator
 
 class RedditDuration(fields.SmallIntField):
     def __init__(self, **kwargs):
-        validators = ([MinValueValidator(0), MaxValueValidator(999)],)
+        validators = [MinValueValidator(0), MaxValueValidator(999)]
         vals = kwargs.get("validators")
         if vals is not None:
             assert isinstance(vals, list)
@@ -26,7 +26,7 @@ class RedditName(fields.CharField):
         return value.casefold().strip()
 
     def to_python_value(self, value: str) -> str:
-        return value
+        return value.casefold().strip()
 
 
 class RedditPermaLink(fields.CharField):
