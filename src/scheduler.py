@@ -1,18 +1,22 @@
 import asyncio
-import inspect
 import sys
 import datetime as dt
-from typing import Any, Callable, List, Coroutine
+from typing import Any, Dict, TypeVar, ParamSpec, Callable, List, Coroutine
 
 import dataclasses
 
 
+R = TypeVar("R")
+P = ParamSpec("P")
+
+
 @dataclasses.dataclass
-class ScheduledTask:
+class ScheduledTask[R]:
     task: asyncio.Task | None
-    coro_fn: Callable[..., Coroutine[Any, Any, Any]]
-    args: List[Any]
-    every: dt.time
+    coro_fn: Callable[..., Coroutine[Any, Any, R]]
+    args: tuple[object, ...]
+    kwargs: Dict[str, object]
+    every: dt.timedelta
     last_ran_at: dt.datetime
 
 
@@ -25,31 +29,25 @@ class Scheduler:
 
     def schedule(
         self,
-        coro_fn: Callable[..., Coroutine[Any, Any, Any]],
-        every: dt.time,
-        args: List[Any] = [],
+        coro_fn: Callable[P, Coroutine[Any, Any, R]],
+        every: dt.timedelta,
         last_ran_at: dt.datetime | None = None,
+        *args: P.args,
+        **kwargs: P.kwargs,
     ):
-        # TODO: pretty sure this doesn't cover all cases
-        expected_params = 0
-        sig = inspect.signature(coro_fn)
-        for param in sig.parameters.values():
-            if param.default is inspect._empty:
-                expected_params += 1
-
-        assert len(args) >= expected_params
 
         self.tasks.append(
-            ScheduledTask(
+            ScheduledTask[R](
                 task=None,
                 coro_fn=coro_fn,
                 args=args,
+                kwargs=kwargs,
                 every=every,
                 last_ran_at=last_ran_at if last_ran_at is not None else dt.datetime.min,
             )
         )
 
-    def seconds_to_wait(self, last_ran_at: dt.datetime, every: dt.time) -> float:
+    def seconds_to_wait(self, last_ran_at: dt.datetime, every: dt.timedelta) -> float:
         now = (
             dt.datetime.now(last_ran_at.tzinfo)
             if last_ran_at.tzinfo
@@ -58,11 +56,36 @@ class Scheduler:
 
         time_delta = now - last_ran_at
 
-        return (
-            (every.hour * 60 + every.minute) * 60
-            + every.second
-            + (every.microsecond / 1000000)
-        ) - time_delta.total_seconds()
+        return every.total_seconds() - time_delta.total_seconds()
+
+    def _handle_tasks(self) -> tuple[float, bool]:
+        """
+        returns (wait, can_stop)
+        """
+        wait = sys.float_info.max
+        can_stop = True
+
+        for t in self.tasks:
+
+            t_wait = self.seconds_to_wait(t.last_ran_at, t.every)
+
+            if t.task is None:
+                if t_wait <= 0 and not self._stop:
+                    t.task = asyncio.create_task(t.coro_fn(*t.args))
+                    t.last_ran_at = dt.datetime.now()
+            elif t.task.done():
+                # TODO: handle exceptions
+                # ex = t.task.exception()
+                # if ex is not None:
+                #     print(ex)
+
+                t.task = None
+            else:
+                can_stop = False
+
+            wait = t_wait if t_wait < wait else wait
+
+        return (wait, can_stop)
 
     async def loop(self):
         assert len(self.tasks) != 0
@@ -72,28 +95,7 @@ class Scheduler:
                 key=lambda t: (self.seconds_to_wait(t.last_ran_at, t.every))
             )
 
-            wait = sys.float_info.max
-            can_stop = True
-
-            for t in self.tasks:
-
-                t_wait = self.seconds_to_wait(t.last_ran_at, t.every)
-
-                if t.task is None:
-                    if t_wait <= 0 and not self._stop:
-                        t.task = asyncio.create_task(t.coro_fn(*t.args))
-                        t.last_ran_at = dt.datetime.now()
-                elif t.task.done():
-                    # TODO: handle exceptions
-                    # ex = t.task.exception()
-                    # if ex is not None:
-                    #     print(ex)
-
-                    t.task = None
-                else:
-                    can_stop = False
-
-                wait = t_wait if t_wait < wait else wait
+            wait, can_stop = self._handle_tasks()
 
             if self._stop and can_stop:
                 break
