@@ -1,14 +1,13 @@
 import asyncio
 import datetime as dt
 import functools
-from collections import namedtuple
+from collections.abc import Coroutine
 from enum import Enum
 from typing import (
     Any,
     Callable,
-    Coroutine,
-    Dict,
     Hashable,
+    NamedTuple,
     ParamSpec,
     Protocol,
     TypeVar,
@@ -18,7 +17,15 @@ from typing import (
 R = TypeVar("R")
 P = ParamSpec("P")
 
-CacheInfo = namedtuple("CacheInfo", ["hits", "misses", "maxsize", "currsize"])
+
+class CacheInfo(NamedTuple):
+    hits: int
+    misses: int
+    maxsize: int
+    cursize: int
+
+
+# CacheInfo = namedtuple("CacheInfo", ["hits", "misses", "maxsize", "currsize"])
 
 
 # https://github.com/python/typing/issues/236#issuecomment-227180301
@@ -83,6 +90,7 @@ class AsyncLruCache[R]:
         # NOTE: this isn't thread safe, will need an async reentrant
         # lock if that every comes into play
         self.lock = asyncio.Lock()
+
         self.root = []  # root of the circular doubly linked list
         # initialize by pointing to self
         self.root[:] = [self.root, self.root, None, None, None]
@@ -115,7 +123,7 @@ class AsyncLruCache[R]:
                     self._delete(key)
         return SENTINEL
 
-    def _delete(self, key):
+    def _delete(self, key: Hashable):
         oldresult = self.root[RESULT]  # noqa
         # delete from the linked list
         link = self.cache[key]
@@ -211,13 +219,13 @@ class AsyncLruCache[R]:
 
 
 class CachedAsyncFn(Protocol[P, R]):
-    cache: AsyncLruCache
+    cache: AsyncLruCache[R]
 
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
     def key(self, *args: P.args, **kwargs: P.kwargs) -> Hashable: ...
     async def clear(self): ...
     async def info(self) -> CacheInfo: ...
-    async def get(self, *args: P.args, **kwargs: P.kwargs): ...
+    async def get(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
     async def set(self, value: R, *args: P.args, **kwargs: P.kwargs): ...
     async def delete(self, *args: P.args, **kwargs: P.kwargs): ...
     async def update(self, *args: P.args, **kwargs: P.kwargs): ...
@@ -237,7 +245,6 @@ class CachedAsyncFn(Protocol[P, R]):
 def lru_aio(
     max_size: int, expire: dt.timedelta | None = None
 ) -> Callable[[Callable[P, Coroutine[Any, Any, R]]], CachedAsyncFn[P, R]]:
-
     def user_function(
         func: Callable[P, Coroutine[Any, Any, R]],
     ) -> CachedAsyncFn[P, R]:
@@ -253,7 +260,7 @@ def lru_aio(
         # the reason for not simply locking though the entire scope of `wrapper`
         # is to avoid dead-locks in the case of recursive calls, given that `cache`
         # doesn't use an RLock
-        pending: Dict[Hashable, asyncio.Future[R]] = {}
+        pending: dict[Hashable, asyncio.Future[R]] = {}
         pending_lock = asyncio.Lock()
 
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -289,7 +296,7 @@ def lru_aio(
                     if key in pending and pending[key] is fut:
                         del pending[key]
 
-        wrapper = cast(CachedAsyncFn, wrapper)
+        wrapper = cast(CachedAsyncFn[P, R], wrapper)
         wrapper.cache = cache
         wrapper.key = lambda *args, **kwargs: make_key(args, kwargs)
 
@@ -358,7 +365,7 @@ def lru_aio(
 
         wrapper.touch = touch
 
-        functools.update_wrapper(wrapper, func)
+        _ = functools.update_wrapper(wrapper, func)
         return wrapper
 
     return user_function

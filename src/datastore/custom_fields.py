@@ -1,14 +1,14 @@
 import enum
 from functools import singledispatchmethod
-from typing import Set, overload
+from typing import overload, override
 
 from tortoise import fields
-from tortoise.validators import MaxValueValidator, MinValueValidator
+from tortoise.validators import MaxValueValidator, MinValueValidator, Validator
 
 
 class RedditDuration(fields.SmallIntField):
     def __init__(self, **kwargs):
-        validators = [MinValueValidator(0), MaxValueValidator(999)]
+        validators: list[Validator] = [MinValueValidator(0), MaxValueValidator(999)]
         vals = kwargs.get("validators")
         if vals is not None:
             assert isinstance(vals, list)
@@ -22,9 +22,11 @@ class RedditName(fields.CharField):
     def __init__(self, **kwargs):
         super().__init__(max_length=22, **kwargs)
 
+    @override
     def to_db_value(self, value: str, instance) -> str:
         return value.casefold().strip()
 
+    @override
     def to_python_value(self, value: str) -> str:
         return value.casefold().strip()
 
@@ -60,11 +62,11 @@ class Permission(enum.StrEnum):
     WIKI = "wiki"
 
     @staticmethod
-    def all() -> Set["Permission"]:
+    def all() -> set["Permission"]:
         return set(Permission)
 
     @staticmethod
-    def none() -> Set["Permission"]:
+    def none() -> set["Permission"]:
         return set()
 
 
@@ -75,30 +77,32 @@ class SubPermissions(fields.CharField):
         # max_length = len("access,chat_config,chat_operator,config,flair,mail,posts,wiki")
         super().__init__(max_length=61, **kwargs)
 
-    def to_db_value(self, value: Set[Permission], instance) -> str:
+    @override
+    def to_db_value(self, value: set[Permission], instance) -> str:
         return self._SEP.join([perm.value for perm in value])
 
     @singledispatchmethod
-    def to_py_val(self, value):
+    def to_py_val(self, value) -> set[Permission]:
         raise NotImplementedError(
             "SubPermissions only supports 'str' and 'Set[Permission]'"
         )
 
     @to_py_val.register
-    def to_python_value_from_str(self, value: str) -> Set[Permission]:
+    def to_python_value_from_str(self, value: str) -> set[Permission]:
         if len(value) == 0:
             return set()
         return set(Permission(perm) for perm in value.split(self._SEP))
 
     @to_py_val.register
-    def to_python_value_from_set_perm(self, value: set) -> Set[Permission]:
+    def to_python_value_from_set_perm(self, value: set[Permission]) -> set[Permission]:
         return value
 
     @overload
-    def to_python_value(self, value: str) -> Set[Permission]: ...
+    def to_python_value(self, value: str) -> set[Permission]: ...
 
     @overload
-    def to_python_value(self, value: Set[Permission]) -> Set[Permission]: ...
+    def to_python_value(self, value: set[Permission]) -> set[Permission]: ...
 
-    def to_python_value(self, *args, **kwargs) -> Set[Permission]:
+    @override
+    def to_python_value(self, *args, **kwargs) -> set[Permission]:
         return self.to_py_val(*args, **kwargs)

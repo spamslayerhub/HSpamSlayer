@@ -1,8 +1,10 @@
 import enum
-from typing import Final, Generic, TypeVar
+from typing import Final
+
 from tortoise import fields
 from tortoise.models import Model
-from tortoise.validators import MaxValueValidator, MinValueValidator
+from tortoise.validators import MinValueValidator
+
 from . import custom_fields
 
 # TODO: some attributes might not be available from reddit, so I need to check what
@@ -30,8 +32,12 @@ class Sub(Model):
 
 class Moderating(Model):
     id: Final = fields.IntField(primary_key=True)
-    user: Final = fields.ForeignKeyField("models.User", related_name="moderatings")
-    sub: Final = fields.ForeignKeyField("models.Sub", related_name="moderatings")
+    user: Final[fields.ForeignKeyRelation["User"]] = fields.ForeignKeyField(
+        "models.User", related_name="moderatings"
+    )
+    sub: Final[fields.ForeignKeyRelation["Sub"]] = fields.ForeignKeyField(
+        "models.Sub", related_name="moderatings"
+    )
     permissions = custom_fields.SubPermissions()
 
 
@@ -111,7 +117,6 @@ class UserSubInfo(Model):
     profile_activity_score = fields.IntField(validators=[MinValueValidator(0)])
 
 
-# TODO: store crosspost parent
 class Post(Model):
     id: Final = fields.IntField(primary_key=True)
     author: Final[fields.ForeignKeyRelation[User]] = fields.ForeignKeyField(

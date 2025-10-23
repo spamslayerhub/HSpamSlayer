@@ -1,10 +1,8 @@
 import asyncio
-import sys
-import datetime as dt
-from typing import Any, Dict, TypeVar, ParamSpec, Callable, List, Coroutine
-
 import dataclasses
-
+import datetime as dt
+import sys
+from typing import Any, Callable, Coroutine, ParamSpec, TypeVar
 
 R = TypeVar("R")
 P = ParamSpec("P")
@@ -12,19 +10,19 @@ P = ParamSpec("P")
 
 @dataclasses.dataclass
 class ScheduledTask[R]:
-    task: asyncio.Task | None
+    task: asyncio.Task[Any] | None
     coro_fn: Callable[..., Coroutine[Any, Any, R]]
     args: tuple[object, ...]
-    kwargs: Dict[str, object]
+    kwargs: dict[str, object]
     every: dt.timedelta
     last_ran_at: dt.datetime
 
 
 # TODO: this needs a db table to keep the last time every task was ran
-class Scheduler:
+class Scheduler[R]:
     def __init__(self) -> None:
-        self.tasks: List[ScheduledTask] = []
-        self._task: asyncio.Task | None = None
+        self.tasks: list[ScheduledTask[R]] = []
+        self._task: asyncio.Task[Any] | None = None
         self._stop = False
 
     def schedule(
@@ -35,7 +33,6 @@ class Scheduler:
         *args: P.args,
         **kwargs: P.kwargs,
     ):
-
         self.tasks.append(
             ScheduledTask[R](
                 task=None,
@@ -58,15 +55,14 @@ class Scheduler:
 
         return every.total_seconds() - time_delta.total_seconds()
 
-    def _handle_tasks(self) -> tuple[float, bool]:
-        """
-        returns (wait, can_stop)
-        """
+    type Time2WaitSecs = float
+    type CanStop = bool
+
+    def _handle_tasks(self) -> tuple[Time2WaitSecs, CanStop]:
         wait = sys.float_info.max
         can_stop = True
 
         for t in self.tasks:
-
             t_wait = self.seconds_to_wait(t.last_ran_at, t.every)
 
             if t.task is None:
@@ -108,7 +104,7 @@ class Scheduler:
 
     def cancel(self):
         assert self._task is not None
-        self._task.cancel()
+        _ = self._task.cancel()
 
     async def safe_cancel(self):
         assert self._task is not None

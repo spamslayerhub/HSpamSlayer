@@ -1,6 +1,6 @@
 from tortoise.contrib import test
+
 from src.datastore.models import Ban, Sub, User
-from src.datastore.custom_fields import Permission
 
 # TODO:
 # moderators: fields.ManyToManyRelation["User"]
@@ -114,7 +114,7 @@ class TestUser(test.IsolatedTestCase):
 
     @test.expectedFailure
     async def test_create_user_bad(self):
-        await User.create(
+        _ = await User.create(
             name="test",
             is_gold=False,
             is_mod=False,
@@ -128,7 +128,7 @@ class TestUser(test.IsolatedTestCase):
             created_at="2025-09-16 09:24",
         )
 
-        await User.create(
+        _ = await User.create(
             name="test2",
             is_gold=False,
             is_mod=False,
@@ -144,10 +144,9 @@ class TestUser(test.IsolatedTestCase):
 
     @test.expectedFailure
     async def test_get_user_bad(self):
-        await User.get(name="test")
+        _ = await User.get(name="test")
 
     async def test_update_user(self):
-
         u_og = User(
             name="test",
             is_gold=False,
@@ -229,7 +228,7 @@ class TestBan(test.IsolatedTestCase):
 
     @test.expectedFailure
     async def test_get_ban_bad(self):
-        await Ban.get(user__name="test")
+        _ = await Ban.get(user__name="test")
 
 
 # TODO: remove this

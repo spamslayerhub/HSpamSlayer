@@ -2,3 +2,6 @@ praw.ini
 hide_*
 db/
 .pytest_cache
+.ruff_cache
+pyrightconfig.json
+__pycache__
