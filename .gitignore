@@ -5,3 +5,5 @@ db/
 .ruff_cache
 pyrightconfig.json
 __pycache__
+logs
+config
