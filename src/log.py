@@ -130,7 +130,7 @@ def get_logger(name: str) -> logging.Logger:
 
         _stderr_handler_singleton = logging.StreamHandler(sys.stderr)
         _stderr_handler_singleton.setFormatter(_color_formatter_singleton)
-        _stderr_handler_singleton.setLevel(CONFIG.logging.stderr)
+        _stderr_handler_singleton.setLevel(CONFIG.logging.stderr_level)
 
     if name in logging.Logger.manager.loggerDict:
         return logging.getLogger(name)

@@ -1,6 +1,5 @@
-import sys
 from enum import IntEnum
-from typing import Any, NamedTuple, Protocol
+from typing import Any, NamedTuple, Protocol, TypeVar
 
 import tomllib
 
@@ -27,7 +26,7 @@ class LoggingFiles(NamedTuple):
 
 
 class Logging(NamedTuple):
-    stderr: LoggingLevels
+    stderr_level: LoggingLevels
     files: LoggingFiles
 
 
@@ -35,25 +34,57 @@ class IndexableContainer(Protocol):
     def __getitem__(self, key: str, /) -> Any: ...
 
 
-class DotIndexer:
-    def __init__(self, obj: IndexableContainer) -> None:
-        self.obj = obj
+T = TypeVar("T")
 
-    def __getitem__(self, index_query: str) -> Any:
+
+class DotIndexer:
+    def __init__(
+        self, obj: IndexableContainer, current_query: str | None = None
+    ) -> None:
+        self.obj = obj
+        self.current_query = current_query
+
+    def get_full_query(self, index_query: str | None) -> str:
+        assert (index_query is not None) or (self.current_query is not None)
+        if self.current_query is None:
+            # NOTE: pyright freaks out if I don't add this
+            assert index_query is not None
+            return index_query
+        if index_query is None:
+            return self.current_query
+        return f"{self.current_query}.{index_query}"
+
+    def __getitem__(self, index_query: str) -> "DotIndexer":
         indexes = index_query.split(".")
         result = self.obj
         for idx in indexes:
             result = result[idx]
-        return result
 
-    def get_inexable(self, index_query: str) -> IndexableContainer:
-        return DotIndexer(self[index_query])
+        full_query = self.get_full_query(index_query)
+        return DotIndexer(result, full_query)
+
+    def get(
+        self,
+        index_query: str | None = None,
+        expected_type: type[T] = type[Any],
+    ) -> T:
+        val: Any = (
+            self.obj
+            if index_query is None or len(index_query) == 0
+            else self[index_query].obj
+        )
+
+        full_query = self.get_full_query(index_query)
+
+        if not isinstance(val, expected_type):
+            raise ValueError(
+                f"expected key '{full_query}' to be of type '{expected_type.__name__}' but got value '{val}' of type '{type(val).__name__}'"
+            )
+
+        return val
 
 
-def parse_file_size(size_str: str | int) -> int:
-    if isinstance(size_str, int):
-        return size_str
-
+def parse_file_size(size_str: str) -> int:
     size_str = size_str.strip().casefold()
 
     byte_conversion_table = {
@@ -83,15 +114,16 @@ class HSSConfig:
         with open(path, "rb") as f:
             data = DotIndexer(tomllib.load(f))
 
-        logging = data.get_inexable("logging")
+        logging = data["logging"]
+
         files = logging["files"]
         self.logging = Logging(
-            stderr=LoggingLevels[logging["stderr.level"]],
+            stderr_level=LoggingLevels[logging.get("stderr.level", expected_type=str)],
             files=LoggingFiles(
-                level=files["level"],
-                max_size=parse_file_size(files["max_size"]),
-                backup_count=files["backup_count"],
-                backup_count_tar=files["backup_count_tar"],
+                level=LoggingLevels[files.get("level", str)],
+                max_size=parse_file_size(files.get("max_size", str)),
+                backup_count=files.get("backup_count", int),
+                backup_count_tar=files.get("backup_count_tar", int),
             ),
         )
 
@@ -104,13 +136,3 @@ def get_config():
     if _config_singleton is None:
         _config_singleton = HSSConfig()
     return _config_singleton
-
-
-def main() -> int:
-    config = HSSConfig()
-    print(config.logging.stderr)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
