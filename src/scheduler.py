@@ -2,23 +2,35 @@ import asyncio
 import dataclasses
 import datetime as dt
 import sys
-from typing import Any, Callable, Coroutine, ParamSpec, TypeVar
+from collections.abc import Coroutine
+from typing import Any, Callable, ParamSpec, TypeVar
+
+from src.log import get_logger
 
 R = TypeVar("R")
 P = ParamSpec("P")
+
+LOGGER = get_logger("hss.scheduler")
+
+type CoroFN[R] = Callable[..., Coroutine[Any, Any, R]]
+type ErrorHandler[R] = Callable[[BaseException, ScheduledTask[R]], None]
 
 
 @dataclasses.dataclass
 class ScheduledTask[R]:
     task: asyncio.Task[Any] | None
-    coro_fn: Callable[..., Coroutine[Any, Any, R]]
+    name: str
+    coro_fn: CoroFN[R]
     args: tuple[object, ...]
     kwargs: dict[str, object]
     every: dt.timedelta
     last_ran_at: dt.datetime
+    errors: list[BaseException]
+    error_handler: ErrorHandler[R] | None
 
 
 # TODO: this needs a db table to keep the last time every task was ran
+# TODO: add debug logs here
 class Scheduler[R]:
     def __init__(self) -> None:
         self.tasks: list[ScheduledTask[R]] = []
@@ -28,21 +40,26 @@ class Scheduler[R]:
     def schedule(
         self,
         coro_fn: Callable[P, Coroutine[Any, Any, R]],
+        name: str,
         every: dt.timedelta,
         last_ran_at: dt.datetime | None = None,
+        error_handler: ErrorHandler[R] | None = None,
         *args: P.args,
         **kwargs: P.kwargs,
-    ):
-        self.tasks.append(
-            ScheduledTask[R](
-                task=None,
-                coro_fn=coro_fn,
-                args=args,
-                kwargs=kwargs,
-                every=every,
-                last_ran_at=last_ran_at if last_ran_at is not None else dt.datetime.min,
-            )
+    ) -> ScheduledTask[R]:
+        task = ScheduledTask[R](
+            task=None,
+            name=name,
+            coro_fn=coro_fn,
+            args=args,
+            kwargs=kwargs,
+            every=every,
+            last_ran_at=last_ran_at if last_ran_at is not None else dt.datetime.min,
+            errors=[],
+            error_handler=error_handler,
         )
+        self.tasks.append(task)
+        return task
 
     def seconds_to_wait(self, last_ran_at: dt.datetime, every: dt.timedelta) -> float:
         now = (
@@ -58,6 +75,22 @@ class Scheduler[R]:
     type Time2WaitSecs = float
     type CanStop = bool
 
+    def _handle_exception(self, t: ScheduledTask[R], ex: BaseException | None):
+        if ex is None:
+            return
+
+        LOGGER.error(f"task '{t.name}' has raised an exception: {ex}")
+        LOGGER.error(f"task '{t.name}' traceback: {ex.__traceback__}")
+
+        t.errors.append(ex)
+
+        # HACK/NOTE: the way for the handler to make a task stop executing after
+        # some given execption would be to set `last_ran_at` to `dt.datetime.max`,
+        # this is not ideal, but it works...
+
+        if t.error_handler is not None:
+            t.error_handler(ex, t)
+
     def _handle_tasks(self) -> tuple[Time2WaitSecs, CanStop]:
         wait = sys.float_info.max
         can_stop = True
@@ -70,11 +103,8 @@ class Scheduler[R]:
                     t.task = asyncio.create_task(t.coro_fn(*t.args))
                     t.last_ran_at = dt.datetime.now()
             elif t.task.done():
-                # TODO: handle exceptions
-                # ex = t.task.exception()
-                # if ex is not None:
-                #     print(ex)
-
+                ex = t.task.exception()
+                self._handle_exception(t, ex)
                 t.task = None
             else:
                 can_stop = False

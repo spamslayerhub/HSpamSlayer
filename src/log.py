@@ -124,13 +124,15 @@ def get_logger(name: str) -> logging.Logger:
     global _non_color_formatter_singleton
     global _stderr_handler_singleton
 
+    log = CONFIG.logging
+
     if _non_color_formatter_singleton is None or _stderr_handler_singleton is None:
         _color_formatter_singleton = LogFormatter(True)
         _non_color_formatter_singleton = LogFormatter(False)
 
         _stderr_handler_singleton = logging.StreamHandler(sys.stderr)
         _stderr_handler_singleton.setFormatter(_color_formatter_singleton)
-        _stderr_handler_singleton.setLevel(CONFIG.logging.stderr_level)
+        _stderr_handler_singleton.setLevel(log.stderr_level)
 
     if name in logging.Logger.manager.loggerDict:
         return logging.getLogger(name)
@@ -138,9 +140,9 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     file_handler = LogGZipRotatingFileHandler(
         LOG_DIR / f"{name}.log",
-        maxBytes=CONFIG.logging.files.max_size,
-        backupCount=CONFIG.logging.files.backup_count,
-        tarBackupCount=CONFIG.logging.files.backup_count_tar,
+        maxBytes=log.files.max_size,
+        backupCount=log.files.backup_count,
+        tarBackupCount=log.files.backup_count_tar,
     )
 
     file_handler.setFormatter(_non_color_formatter_singleton)
