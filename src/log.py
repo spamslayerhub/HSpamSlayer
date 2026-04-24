@@ -110,6 +110,7 @@ class LogGZipRotatingFileHandler(logging.handlers.RotatingFileHandler):
             if os.path.exists(dfn):
                 os.remove(dfn)
             self.rotate(self.baseFilename, dfn)
+
         if not self.delay:
             self.stream = self._open()
 

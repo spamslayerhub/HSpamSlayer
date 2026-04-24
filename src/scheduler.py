@@ -6,6 +6,7 @@ from collections.abc import Coroutine
 from typing import Any, Callable, ParamSpec, TypeVar
 
 from src.log import get_logger
+from src.datastore.models import SchedulerTask
 
 R = TypeVar("R")
 P = ParamSpec("P")
@@ -29,7 +30,6 @@ class ScheduledTask[R]:
     error_handler: ErrorHandler[R] | None
 
 
-# TODO: this needs a db table to keep the last time every task was ran
 # TODO: add debug logs here
 class Scheduler[R]:
     def __init__(self) -> None:
@@ -37,16 +37,21 @@ class Scheduler[R]:
         self._task: asyncio.Task[Any] | None = None
         self._stop = False
 
-    def schedule(
+    async def schedule(
         self,
         coro_fn: Callable[P, Coroutine[Any, Any, R]],
         name: str,
         every: dt.timedelta,
-        last_ran_at: dt.datetime | None = None,
         error_handler: ErrorHandler[R] | None = None,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> ScheduledTask[R]:
+
+        task_db = await SchedulerTask.get_or_none(name=name)
+        if task_db is None:
+            task_db = await SchedulerTask.create(name=name, last_ran_at=dt.datetime.min)
+            LOGGER.info(f"created scheduler task '{name}'!")
+
         task = ScheduledTask[R](
             task=None,
             name=name,
@@ -54,11 +59,16 @@ class Scheduler[R]:
             args=args,
             kwargs=kwargs,
             every=every,
-            last_ran_at=last_ran_at if last_ran_at is not None else dt.datetime.min,
+            last_ran_at=task_db.last_ran_at,
             errors=[],
             error_handler=error_handler,
         )
+
         self.tasks.append(task)
+
+        LOGGER.debug(
+            f"scheduled task '{name}' to run every {every}, last ran at {task_db.last_ran_at}"
+        )
         return task
 
     def seconds_to_wait(self, last_ran_at: dt.datetime, every: dt.timedelta) -> float:
@@ -91,7 +101,7 @@ class Scheduler[R]:
         if t.error_handler is not None:
             t.error_handler(ex, t)
 
-    def _handle_tasks(self) -> tuple[Time2WaitSecs, CanStop]:
+    async def _handle_tasks(self) -> tuple[Time2WaitSecs, CanStop]:
         wait = sys.float_info.max
         can_stop = True
 
@@ -101,7 +111,13 @@ class Scheduler[R]:
             if t.task is None:
                 if t_wait <= 0 and not self._stop:
                     t.task = asyncio.create_task(t.coro_fn(*t.args))
-                    t.last_ran_at = dt.datetime.now()
+
+                    task_db = await SchedulerTask.get(name=t.name)
+                    task_db.last_ran_at = dt.datetime.now()
+                    await task_db.save()
+
+                    t.last_ran_at = task_db.last_ran_at
+
             elif t.task.done():
                 ex = t.task.exception()
                 self._handle_exception(t, ex)
@@ -121,7 +137,7 @@ class Scheduler[R]:
                 key=lambda t: (self.seconds_to_wait(t.last_ran_at, t.every))
             )
 
-            wait, can_stop = self._handle_tasks()
+            wait, can_stop = await self._handle_tasks()
 
             if self._stop and can_stop:
                 break

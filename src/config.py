@@ -115,8 +115,8 @@ class HSSConfig:
             data = DotIndexer(tomllib.load(f))
 
         logging = data["logging"]
-
         files = logging["files"]
+
         self.logging = Logging(
             stderr_level=LoggingLevels[logging.get("stderr.level", expected_type=str)],
             files=LoggingFiles(

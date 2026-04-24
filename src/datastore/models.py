@@ -7,6 +7,13 @@ from tortoise.validators import MinValueValidator
 
 from . import custom_fields
 
+
+class SchedulerTask(Model):
+    id: Final = fields.IntField(primary_key=True)
+    name: Final = fields.TextField(unique=True)
+    last_ran_at = fields.DatetimeField(auto_now=True)
+
+
 # TODO: some attributes might not be available from reddit, so I need to check what
 # needs to be nullable
 
